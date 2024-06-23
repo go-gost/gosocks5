@@ -76,11 +76,12 @@ var (
 
 /*
 Method selection
- +----+----------+----------+
- |VER | NMETHODS | METHODS  |
- +----+----------+----------+
- | 1  |    1     | 1 to 255 |
- +----+----------+----------+
+
+	+----+----------+----------+
+	|VER | NMETHODS | METHODS  |
+	+----+----------+----------+
+	| 1  |    1     | 1 to 255 |
+	+----+----------+----------+
 */
 func ReadMethods(r io.Reader) ([]uint8, error) {
 	var b [257]byte
@@ -117,12 +118,13 @@ func WriteMethod(method uint8, w io.Writer) error {
 }
 
 /*
- Username/Password authentication request
-  +----+------+----------+------+----------+
-  |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
-  +----+------+----------+------+----------+
-  | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
-  +----+------+----------+------+----------+
+Username/Password authentication request
+
+	+----+------+----------+------+----------+
+	|VER | ULEN |  UNAME   | PLEN |  PASSWD  |
+	+----+------+----------+------+----------+
+	| 1  |  1   | 1 to 255 |  1   | 1 to 255 |
+	+----+------+----------+------+----------+
 */
 type UserPassRequest struct {
 	Version  byte
@@ -201,12 +203,13 @@ func (req *UserPassRequest) String() string {
 }
 
 /*
- Username/Password authentication response
-  +----+--------+
-  |VER | STATUS |
-  +----+--------+
-  | 1  |   1    |
-  +----+--------+
+Username/Password authentication response
+
+	+----+--------+
+	|VER | STATUS |
+	+----+--------+
+	| 1  |   1    |
+	+----+--------+
 */
 type UserPassResponse struct {
 	Version byte
@@ -251,11 +254,12 @@ func (res *UserPassResponse) String() string {
 
 /*
 Address
- +------+----------+----------+
- | ATYP |   ADDR   |   PORT   |
- +------+----------+----------+
- |  1   | Variable |    2     |
- +------+----------+----------+
+
+	+------+----------+----------+
+	| ATYP |   ADDR   |   PORT   |
+	+------+----------+----------+
+	|  1   | Variable |    2     |
+	+------+----------+----------+
 */
 type Addr struct {
 	Type uint8
@@ -383,12 +387,15 @@ func (addr *Addr) checkType() {
 	switch addr.Type {
 	case AddrIPv4, AddrIPv6, AddrDomain:
 	default:
-		addr.Type = AddrDomain
-		if ip := net.ParseIP(addr.Host); ip != nil {
-			if ip.To4() != nil {
-				addr.Type = AddrIPv4
-			} else {
-				addr.Type = AddrIPv6
+		addr.Type = AddrIPv4
+		if addr.Host != "" {
+			addr.Type = AddrDomain
+			if ip := net.ParseIP(addr.Host); ip != nil {
+				if ip.To4() != nil {
+					addr.Type = AddrIPv4
+				} else {
+					addr.Type = AddrIPv6
+				}
 			}
 		}
 	}
@@ -416,11 +423,12 @@ func (addr *Addr) String() string {
 
 /*
 The SOCKSv5 request
- +----+-----+-------+------+----------+----------+
- |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
- +----+-----+-------+------+----------+----------+
- | 1  |  1  | X'00' |  1   | Variable |    2     |
- +----+-----+-------+------+----------+----------+
+
+	+----+-----+-------+------+----------+----------+
+	|VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
+	+----+-----+-------+------+----------+----------+
+	| 1  |  1  | X'00' |  1   | Variable |    2     |
+	+----+-----+-------+------+----------+----------+
 */
 type Request struct {
 	Cmd  uint8
@@ -507,11 +515,12 @@ func (r *Request) String() string {
 
 /*
 The SOCKSv5 reply
- +----+-----+-------+------+----------+----------+
- |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
- +----+-----+-------+------+----------+----------+
- | 1  |  1  | X'00' |  1   | Variable |    2     |
- +----+-----+-------+------+----------+----------+
+
+	+----+-----+-------+------+----------+----------+
+	|VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
+	+----+-----+-------+------+----------+----------+
+	| 1  |  1  | X'00' |  1   | Variable |    2     |
+	+----+-----+-------+------+----------+----------+
 */
 type Reply struct {
 	Rep  uint8
@@ -599,11 +608,12 @@ func (r *Reply) String() string {
 
 /*
 UDP request
- +----+------+------+----------+----------+----------+
- |RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
- +----+------+------+----------+----------+----------+
- | 2  |  1   |  1   | Variable |    2     | Variable |
- +----+------+------+----------+----------+----------+
+
+	+----+------+------+----------+----------+----------+
+	|RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
+	+----+------+------+----------+----------+----------+
+	| 2  |  1   |  1   | Variable |    2     | Variable |
+	+----+------+------+----------+----------+----------+
 */
 type UDPHeader struct {
 	Rsv  uint16
