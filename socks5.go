@@ -11,7 +11,6 @@ import (
 	"io"
 	"net"
 	"strconv"
-	"sync"
 )
 
 const (
@@ -61,19 +60,6 @@ var (
 	ErrAuthFailure = errors.New("auth failure")
 )
 
-var (
-	LargePoolSize = 16 * 1024
-)
-
-var (
-	// buff pool for udp
-	pool = sync.Pool{
-		New: func() interface{} {
-			return make([]byte, 64*1024)
-		},
-	}
-)
-
 /*
 Method selection
 
@@ -86,8 +72,7 @@ Method selection
 func ReadMethods(r io.Reader) ([]uint8, error) {
 	var b [257]byte
 
-	n, err := io.ReadAtLeast(r, b[:], 2)
-	if err != nil {
+	if _, err := io.ReadFull(r, b[:2]); err != nil {
 		return nil, err
 	}
 
@@ -99,15 +84,12 @@ func ReadMethods(r io.Reader) ([]uint8, error) {
 		return nil, ErrBadMethod
 	}
 
-	length := 2 + int(b[1])
-	if n < length {
-		if _, err := io.ReadFull(r, b[n:length]); err != nil {
-			return nil, err
-		}
+	if _, err := io.ReadFull(r, b[2:2+int(b[1])]); err != nil {
+		return nil, err
 	}
 
 	methods := make([]byte, int(b[1]))
-	copy(methods, b[2:length])
+	copy(methods, b[2:])
 
 	return methods, nil
 }
@@ -141,10 +123,9 @@ func NewUserPassRequest(ver byte, u, p string) *UserPassRequest {
 }
 
 func ReadUserPassRequest(r io.Reader) (*UserPassRequest, error) {
-	var b [513]byte
+	var b [255]byte
 
-	n, err := io.ReadAtLeast(r, b[:], 2)
-	if err != nil {
+	if _, err := io.ReadFull(r, b[:2]); err != nil {
 		return nil, err
 	}
 
@@ -157,24 +138,23 @@ func ReadUserPassRequest(r io.Reader) (*UserPassRequest, error) {
 	}
 
 	ulen := int(b[1])
-	length := ulen + 3
-
-	if n < length {
-		if _, err := io.ReadFull(r, b[n:length]); err != nil {
-			return nil, err
-		}
-		n = length
-	}
-	req.Username = string(b[2 : 2+ulen])
-
-	plen := int(b[length-1])
-	length += plen
-	if n < length {
-		if _, err := io.ReadFull(r, b[n:length]); err != nil {
+	if ulen > 0 {
+		if _, err := io.ReadFull(r, b[:ulen]); err != nil {
 			return nil, err
 		}
 	}
-	req.Password = string(b[3+ulen : length])
+	req.Username = string(b[:ulen])
+
+	if _, err := io.ReadFull(r, b[:1]); err != nil {
+		return nil, err
+	}
+	plen := int(b[0])
+	if plen > 0 {
+		if _, err := io.ReadFull(r, b[:plen]); err != nil {
+			return nil, err
+		}
+	}
+	req.Password = string(b[:plen])
 	return req, nil
 }
 
@@ -699,14 +679,15 @@ func (d *UDPDatagram) ReadFrom(r io.Reader) (n int64, err error) {
 
 	dlen := int64(d.Header.Rsv)
 	if dlen == 0 { // standard SOCKS5 UDP datagram
-		// TODO: avoid memory allocation
-		d.Data, err = io.ReadAll(r)
-		if err != nil {
+		buf := bytes.NewBuffer(d.Data[:0])
+		if _, err = io.Copy(buf, r); err != nil {
 			return
 		}
+		d.Data = buf.Bytes()
+
 		dlen = int64(len(d.Data))
 	} else { // extended feature, for UDP over TCP, using reserved field as data length
-		if cap(d.Data) >= int(dlen) {
+		if len(d.Data) >= int(dlen) {
 			d.Data = d.Data[:dlen]
 		} else {
 			d.Data = make([]byte, dlen)
