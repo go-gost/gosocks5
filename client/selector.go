@@ -38,6 +38,9 @@ func (selector *clientSelector) Select(methods ...uint8) (method uint8) {
 
 func (selector *clientSelector) OnSelected(method uint8, conn net.Conn) (string, net.Conn, error) {
 	switch method {
+	case gosocks5.MethodNoAuth:
+		return "", conn, nil
+
 	case gosocks5.MethodUserPass:
 		var username, password string
 		if selector.user != nil {

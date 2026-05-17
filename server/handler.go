@@ -155,7 +155,7 @@ func (h *serverHandler) handleBind(conn net.Conn, req *gosocks5.Request) error {
 }
 
 func transport(rw1, rw2 io.ReadWriter) error {
-	errc := make(chan error, 1)
+	errc := make(chan error, 2)
 	go func() {
 		buf := trPool.Get().([]byte)
 		defer trPool.Put(buf)
@@ -187,8 +187,12 @@ func toSocksAddr(addr net.Addr) *gosocks5.Addr {
 		host = h
 		port, _ = strconv.Atoi(p)
 	}
+	atyp := gosocks5.AddrIPv4
+	if ip := net.ParseIP(host); ip != nil && ip.To4() == nil {
+		atyp = gosocks5.AddrIPv6
+	}
 	return &gosocks5.Addr{
-		Type: gosocks5.AddrIPv4,
+		Type: atyp,
 		Host: host,
 		Port: uint16(port),
 	}

@@ -651,8 +651,12 @@ func (h *UDPHeader) WriteTo(w io.Writer) (int64, error) {
 }
 
 func (h *UDPHeader) String() string {
+	addr := h.Addr
+	if addr == nil {
+		addr = &Addr{}
+	}
 	return fmt.Sprintf("%d %d %d %s",
-		h.Rsv, h.Frag, h.Addr.Type, h.Addr.String())
+		h.Rsv, h.Frag, addr.Type, addr.String())
 }
 
 type UDPDatagram struct {

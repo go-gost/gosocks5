@@ -38,7 +38,14 @@ func (selector *serverSelector) Select(methods ...uint8) (method uint8) {
 
 	// when user/pass is set, auth is mandatory
 	if len(selector.users) > 0 {
-		method = gosocks5.MethodUserPass
+		method = gosocks5.MethodNoAcceptable
+		for _, m := range methods {
+			if m == gosocks5.MethodUserPass {
+				method = gosocks5.MethodUserPass
+				return
+			}
+		}
+		return
 	}
 
 	return
@@ -46,6 +53,9 @@ func (selector *serverSelector) Select(methods ...uint8) (method uint8) {
 
 func (selector *serverSelector) OnSelected(method uint8, conn net.Conn) (string, net.Conn, error) {
 	switch method {
+	case gosocks5.MethodNoAuth:
+		return "", conn, nil
+
 	case gosocks5.MethodUserPass:
 		req, err := gosocks5.ReadUserPassRequest(conn)
 		if err != nil {
