@@ -1,7 +1,6 @@
 package gosocks5
 
 import (
-	"io"
 	//"log"
 	"net"
 	"sync"
@@ -84,7 +83,7 @@ func (conn *Conn) clientHandshake() error {
 		return err
 	}
 
-	if _, err := io.ReadFull(conn.c, b[:2]); err != nil {
+	if _, err := readFull(conn.c, b[:2]); err != nil {
 		return err
 	}
 

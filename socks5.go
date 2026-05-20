@@ -4,13 +4,13 @@
 package gosocks5
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"strconv"
+	"sync"
 )
 
 const (
@@ -60,6 +60,38 @@ var (
 	ErrAuthFailure = errors.New("auth failure")
 )
 
+// readAtLeast reads from r into buf until at least min bytes have been read.
+// It avoids the defer allocation incurred by io.ReadAtLeast in Go versions
+// where open-coded defers cannot apply to functions with for loops.
+func readAtLeast(r io.Reader, buf []byte, min int) (int, error) {
+	var n int
+	for n < min {
+		nn, err := r.Read(buf[n:])
+		n += nn
+		if err != nil {
+			if err == io.EOF && n >= min {
+				return n, nil
+			}
+			if err == io.EOF {
+				return n, io.ErrUnexpectedEOF
+			}
+			return n, err
+		}
+	}
+	return n, nil
+}
+
+func readFull(r io.Reader, buf []byte) (int, error) {
+	return readAtLeast(r, buf, len(buf))
+}
+
+var writeBufPool = sync.Pool{
+	New: func() interface{} {
+		b := make([]byte, 513)
+		return &b
+	},
+}
+
 /*
 Method selection
 
@@ -72,7 +104,7 @@ Method selection
 func ReadMethods(r io.Reader) ([]uint8, error) {
 	var b [257]byte
 
-	if _, err := io.ReadFull(r, b[:2]); err != nil {
+	if _, err := readFull(r, b[:2]); err != nil {
 		return nil, err
 	}
 
@@ -84,7 +116,7 @@ func ReadMethods(r io.Reader) ([]uint8, error) {
 		return nil, ErrBadMethod
 	}
 
-	if _, err := io.ReadFull(r, b[2:2+int(b[1])]); err != nil {
+	if _, err := readFull(r, b[2:2+int(b[1])]); err != nil {
 		return nil, err
 	}
 
@@ -125,7 +157,7 @@ func NewUserPassRequest(ver byte, u, p string) *UserPassRequest {
 func ReadUserPassRequest(r io.Reader) (*UserPassRequest, error) {
 	var b [255]byte
 
-	if _, err := io.ReadFull(r, b[:2]); err != nil {
+	if _, err := readFull(r, b[:2]); err != nil {
 		return nil, err
 	}
 
@@ -139,18 +171,18 @@ func ReadUserPassRequest(r io.Reader) (*UserPassRequest, error) {
 
 	ulen := int(b[1])
 	if ulen > 0 {
-		if _, err := io.ReadFull(r, b[:ulen]); err != nil {
+		if _, err := readFull(r, b[:ulen]); err != nil {
 			return nil, err
 		}
 	}
 	req.Username = string(b[:ulen])
 
-	if _, err := io.ReadFull(r, b[:1]); err != nil {
+	if _, err := readFull(r, b[:1]); err != nil {
 		return nil, err
 	}
 	plen := int(b[0])
 	if plen > 0 {
-		if _, err := io.ReadFull(r, b[:plen]); err != nil {
+		if _, err := readFull(r, b[:plen]); err != nil {
 			return nil, err
 		}
 	}
@@ -159,7 +191,9 @@ func ReadUserPassRequest(r io.Reader) (*UserPassRequest, error) {
 }
 
 func (req *UserPassRequest) Write(w io.Writer) error {
-	var b [513]byte
+	bp := writeBufPool.Get().(*[]byte)
+	b := *bp
+	defer writeBufPool.Put(bp)
 
 	b[0] = req.Version
 	ulen := len(req.Username)
@@ -206,7 +240,7 @@ func NewUserPassResponse(ver, status byte) *UserPassResponse {
 func ReadUserPassResponse(r io.Reader) (*UserPassResponse, error) {
 	var b [2]byte
 
-	if _, err := io.ReadFull(r, b[:]); err != nil {
+	if _, err := readFull(r, b[:]); err != nil {
 		return nil, err
 	}
 
@@ -273,7 +307,7 @@ func (addr *Addr) ParseFrom(saddr string) error {
 func (addr *Addr) ReadFrom(r io.Reader) (n int64, err error) {
 	var b [255]byte
 
-	_, err = io.ReadFull(r, b[:1])
+	_, err = readFull(r, b[:1])
 	if err != nil {
 		return
 	}
@@ -282,21 +316,21 @@ func (addr *Addr) ReadFrom(r io.Reader) (n int64, err error) {
 
 	switch addr.Type {
 	case AddrIPv4:
-		_, err = io.ReadFull(r, b[:net.IPv4len])
+		_, err = readFull(r, b[:net.IPv4len])
 		addr.Host = net.IP(b[:net.IPv4len]).String()
 		n += net.IPv4len
 	case AddrIPv6:
-		_, err = io.ReadFull(r, b[:net.IPv6len])
+		_, err = readFull(r, b[:net.IPv6len])
 		addr.Host = net.IP(b[:net.IPv6len]).String()
 		n += net.IPv6len
 	case AddrDomain:
-		if _, err = io.ReadFull(r, b[:1]); err != nil {
+		if _, err = readFull(r, b[:1]); err != nil {
 			return
 		}
 		addrlen := int(b[0])
 		n++
 
-		_, err = io.ReadFull(r, b[:addrlen])
+		_, err = readFull(r, b[:addrlen])
 		addr.Host = string(b[:addrlen])
 		n += int64(addrlen)
 	default:
@@ -307,7 +341,7 @@ func (addr *Addr) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 
-	_, err = io.ReadFull(r, b[:2])
+	_, err = readFull(r, b[:2])
 	addr.Port = binary.BigEndian.Uint16(b[:2])
 	n += 2
 
@@ -326,8 +360,51 @@ func (addr *Addr) WriteTo(w io.Writer) (int64, error) {
 }
 
 func (addr *Addr) Decode(b []byte) error {
-	_, err := addr.ReadFrom(bytes.NewReader(b))
+	_, err := addr.decode(b)
 	return err
+}
+
+// decode parses addr wire format directly from b. It avoids the allocations
+// incurred by wrapping in bytes.NewReader and calling ReadFrom (which issues
+// multiple io.ReadFull calls, each allocating a defer record).
+func (addr *Addr) decode(b []byte) (int, error) {
+	if len(b) < 1 {
+		return 0, io.ErrUnexpectedEOF
+	}
+	addr.Type = b[0]
+	n := 1
+
+	switch addr.Type {
+	case AddrIPv4:
+		if len(b) < n+net.IPv4len+2 {
+			return 0, io.ErrUnexpectedEOF
+		}
+		addr.Host = net.IP(b[n : n+net.IPv4len]).String()
+		n += net.IPv4len
+	case AddrIPv6:
+		if len(b) < n+net.IPv6len+2 {
+			return 0, io.ErrUnexpectedEOF
+		}
+		addr.Host = net.IP(b[n : n+net.IPv6len]).String()
+		n += net.IPv6len
+	case AddrDomain:
+		if len(b) < n+1 {
+			return 0, io.ErrUnexpectedEOF
+		}
+		addrlen := int(b[n])
+		n++
+		if len(b) < n+addrlen+2 {
+			return 0, io.ErrUnexpectedEOF
+		}
+		addr.Host = string(b[n : n+addrlen])
+		n += addrlen
+	default:
+		return 0, ErrBadAddrType
+	}
+	addr.Port = binary.BigEndian.Uint16(b[n:])
+	n += 2
+
+	return n, nil
 }
 
 func (addr *Addr) Encode(b []byte) (int, error) {
@@ -398,7 +475,31 @@ func (addr *Addr) Length() (n int) {
 }
 
 func (addr *Addr) String() string {
-	return net.JoinHostPort(addr.Host, strconv.Itoa(int(addr.Port)))
+	host := addr.Host
+	ipv6 := false
+	for i := 0; i < len(host); i++ {
+		if host[i] == ':' {
+			ipv6 = true
+			break
+		}
+	}
+
+	var b [264]byte // stack-allocated; max host 255 + '[]:' + 5 port digits
+	pos := 0
+	if ipv6 {
+		b[pos] = '['
+		pos++
+	}
+	pos += copy(b[pos:], host)
+	if ipv6 {
+		b[pos] = ']'
+		pos++
+	}
+	b[pos] = ':'
+	pos++
+	buf := strconv.AppendUint(b[pos:pos], uint64(addr.Port), 10)
+	pos += len(buf)
+	return string(b[:pos])
 }
 
 /*
@@ -425,7 +526,7 @@ func NewRequest(cmd uint8, addr *Addr) *Request {
 func ReadRequest(r io.Reader) (*Request, error) {
 	var b [262]byte
 
-	n, err := io.ReadAtLeast(r, b[:], 5)
+	n, err := readAtLeast(r, b[:], 5)
 	if err != nil {
 		return nil, err
 	}
@@ -452,12 +553,12 @@ func ReadRequest(r io.Reader) (*Request, error) {
 	}
 
 	if n < length {
-		if _, err := io.ReadFull(r, b[n:length]); err != nil {
+		if _, err := readFull(r, b[n:length]); err != nil {
 			return nil, err
 		}
 	}
 	addr := new(Addr)
-	if err := addr.Decode(b[3:length]); err != nil {
+	if _, err := addr.decode(b[3:length]); err != nil {
 		return nil, err
 	}
 	request.Addr = addr
@@ -466,7 +567,9 @@ func ReadRequest(r io.Reader) (*Request, error) {
 }
 
 func (r *Request) Write(w io.Writer) (err error) {
-	var b [262]byte
+	bp := writeBufPool.Get().(*[]byte)
+	b := *bp
+	defer writeBufPool.Put(bp)
 
 	b[0] = Ver5
 	b[1] = r.Cmd
@@ -517,7 +620,7 @@ func NewReply(rep uint8, addr *Addr) *Reply {
 func ReadReply(r io.Reader) (*Reply, error) {
 	var b [262]byte
 
-	n, err := io.ReadAtLeast(r, b[:], 5)
+	n, err := readAtLeast(r, b[:], 5)
 	if err != nil {
 		return nil, err
 	}
@@ -544,13 +647,13 @@ func ReadReply(r io.Reader) (*Reply, error) {
 	}
 
 	if n < length {
-		if _, err := io.ReadFull(r, b[n:length]); err != nil {
+		if _, err := readFull(r, b[n:length]); err != nil {
 			return nil, err
 		}
 	}
 
 	addr := new(Addr)
-	if err := addr.Decode(b[3:length]); err != nil {
+	if _, err := addr.decode(b[3:length]); err != nil {
 		return nil, err
 	}
 	reply.Addr = addr
@@ -559,18 +662,22 @@ func ReadReply(r io.Reader) (*Reply, error) {
 }
 
 func (r *Reply) Write(w io.Writer) (err error) {
-	var b [262]byte
+	bp := writeBufPool.Get().(*[]byte)
+	b := *bp
+	defer writeBufPool.Put(bp)
 
 	b[0] = Ver5
 	b[1] = r.Rep
 	b[2] = 0        //rsv
 	b[3] = AddrIPv4 // default
 	length := 10
-	b[4], b[5], b[6], b[7], b[8], b[9] = 0, 0, 0, 0, 0, 0 // reset address field
 
 	if r.Addr != nil {
 		n, _ := r.Addr.Encode(b[3:])
 		length = 3 + n
+	} else {
+		// Zero the default IPv4 address field in case of stale pool data.
+		b[4], b[5], b[6], b[7], b[8], b[9] = 0, 0, 0, 0, 0, 0
 	}
 	_, err = w.Write(b[:length])
 
@@ -612,7 +719,7 @@ func NewUDPHeader(rsv uint16, frag uint8, addr *Addr) *UDPHeader {
 func (h *UDPHeader) ReadFrom(r io.Reader) (n int64, err error) {
 	var b [3]byte
 
-	nn, err := io.ReadFull(r, b[:])
+	nn, err := readFull(r, b[:])
 	n += int64(nn)
 	if err != nil {
 		return
@@ -683,23 +790,25 @@ func (d *UDPDatagram) ReadFrom(r io.Reader) (n int64, err error) {
 
 	dlen := int64(d.Header.Rsv)
 	if dlen == 0 { // standard SOCKS5 UDP datagram
-		buf := bytes.NewBuffer(d.Data[:0])
-		if _, err = io.CopyN(buf, r, 65535); err != nil {
-			if err != io.EOF {
-				return
-			}
-			err = nil
+		// Pre-allocate a reasonable buffer if d.Data has no capacity.
+		// Callers reusing UDPDatagram objects will hit 0 allocs here.
+		if cap(d.Data) < 4096 {
+			d.Data = make([]byte, 0, 4096)
 		}
-		d.Data = buf.Bytes()
-
-		dlen = int64(len(d.Data))
+		d.Data = d.Data[:cap(d.Data)]
+		nn, rerr := r.Read(d.Data)
+		if rerr != nil && rerr != io.EOF {
+			return
+		}
+		d.Data = d.Data[:nn]
+		dlen = int64(nn)
 	} else { // extended feature, for UDP over TCP, using reserved field as data length
 		if len(d.Data) >= int(dlen) {
 			d.Data = d.Data[:dlen]
 		} else {
 			d.Data = make([]byte, dlen)
 		}
-		if _, err = io.ReadFull(r, d.Data[:]); err != nil {
+		if _, err = readFull(r, d.Data[:]); err != nil {
 			return
 		}
 	}
