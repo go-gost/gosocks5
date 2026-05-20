@@ -58,7 +58,8 @@ func TestConn_ReadTriggersHandshake(t *testing.T) {
 	cc := gosocks5.ClientConn(cli, client.DefaultSelector)
 	sc := gosocks5.ServerConn(srv, &noAuthSelector{})
 
-	go sc.Handleshake()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- sc.Handleshake() }()
 
 	// Write triggers client handshake, then data flows
 	go cc.Write([]byte("ping"))
@@ -71,6 +72,9 @@ func TestConn_ReadTriggersHandshake(t *testing.T) {
 	if string(buf[:n]) != "ping" {
 		t.Fatalf("got %q", buf[:n])
 	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("server Handleshake() = %v", err)
+	}
 }
 
 func TestConn_DoubleHandshake(t *testing.T) {
@@ -81,13 +85,17 @@ func TestConn_DoubleHandshake(t *testing.T) {
 	cc := gosocks5.ClientConn(cli, client.DefaultSelector)
 	sc := gosocks5.ServerConn(srv, &noAuthSelector{})
 
-	go sc.Handleshake()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- sc.Handleshake() }()
 
 	if err := cc.Handleshake(); err != nil {
 		t.Fatal(err)
 	}
 	// Second call is idempotent
 	if err := cc.Handleshake(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serverErr; err != nil {
 		t.Fatal(err)
 	}
 }
@@ -123,11 +131,14 @@ func TestConn_ID(t *testing.T) {
 	sc := gosocks5.ServerConn(srv, &idSelector{})
 	cc := gosocks5.ClientConn(cli, client.DefaultSelector)
 
-	go sc.Handleshake()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- sc.Handleshake() }()
 	if err := cc.Handleshake(); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(10 * time.Millisecond)
+	if err := <-serverErr; err != nil {
+		t.Fatal(err)
+	}
 
 	if id := sc.ID(); id != "client-123" {
 		t.Fatalf("expected client-123, got %q", id)
