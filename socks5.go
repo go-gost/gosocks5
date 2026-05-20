@@ -684,8 +684,11 @@ func (d *UDPDatagram) ReadFrom(r io.Reader) (n int64, err error) {
 	dlen := int64(d.Header.Rsv)
 	if dlen == 0 { // standard SOCKS5 UDP datagram
 		buf := bytes.NewBuffer(d.Data[:0])
-		if _, err = io.Copy(buf, r); err != nil {
-			return
+		if _, err = io.CopyN(buf, r, 65535); err != nil {
+			if err != io.EOF {
+				return
+			}
+			err = nil
 		}
 		d.Data = buf.Bytes()
 

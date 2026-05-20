@@ -32,6 +32,8 @@ type serverHandler struct {
 
 func (h *serverHandler) Handle(conn net.Conn) error {
 	conn = gosocks5.ServerConn(conn, h.selector)
+	defer conn.Close()
+
 	req, err := gosocks5.ReadRequest(conn)
 	if err != nil {
 		return err
@@ -79,7 +81,11 @@ var (
 
 func (h *serverHandler) handleBind(conn net.Conn, req *gosocks5.Request) error {
 	addr := req.Addr.String()
-	bindAddr, _ := net.ResolveTCPAddr("tcp", addr)
+	bindAddr, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		gosocks5.NewReply(gosocks5.Failure, nil).Write(conn)
+		return err
+	}
 	ln, err := net.ListenTCP("tcp", bindAddr) // strict mode: if the port already in use, it will return error
 	if err != nil {
 		gosocks5.NewReply(gosocks5.Failure, nil).Write(conn)
@@ -143,10 +149,7 @@ func (h *serverHandler) handleBind(conn net.Conn, req *gosocks5.Request) error {
 				return err
 			}
 
-			if err = transport(pc2, pconn); err != nil {
-			}
-
-			return err
+			return transport(pc2, pconn)
 		case err := <-pipe():
 			ln.Close()
 			return err

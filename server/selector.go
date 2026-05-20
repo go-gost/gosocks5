@@ -67,8 +67,7 @@ func (selector *serverSelector) OnSelected(method uint8, conn net.Conn) (string,
 			username := user.Username()
 			password, _ := user.Password()
 			if (req.Username == username && req.Password == password) ||
-				(req.Username == username && password == "") ||
-				(username == "" && req.Password == password) {
+				(req.Username == username && password == "") {
 				valid = true
 				break
 			}
