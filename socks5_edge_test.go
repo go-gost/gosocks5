@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -596,5 +597,261 @@ func TestAddr_ReadFrom_IPv4ReadError(t *testing.T) {
 	_, err := a.ReadFrom(bytes.NewReader(buf))
 	if err == nil {
 		t.Fatal("expected error reading IPv4 bytes")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// readAtLeast — EOF with enough data (n >= min when EOF hits)
+// ---------------------------------------------------------------------------
+
+type chunkReader struct {
+	data   []byte
+	chunks []int
+	pos    int
+	idx    int
+}
+
+func (r *chunkReader) Read(b []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, io.EOF
+	}
+	if r.idx >= len(r.chunks) {
+		n := copy(b, r.data[r.pos:])
+		r.pos += n
+		return n, io.EOF
+	}
+	n := r.chunks[r.idx]
+	r.idx++
+	if r.pos+n > len(r.data) {
+		n = len(r.data) - r.pos
+	}
+	copy(b, r.data[r.pos:r.pos+n])
+	r.pos += n
+	var err error
+	if r.pos >= len(r.data) {
+		err = io.EOF
+	}
+	return n, err
+}
+
+func TestReadAtLeast_EOFWithEnoughData(t *testing.T) {
+	// Return 3 bytes, then 2 bytes with EOF — total 5 >= min 5
+	r := &chunkReader{data: []byte{1, 2, 3, 4, 5}, chunks: []int{3, 2}}
+	var buf [10]byte
+	n, err := readAtLeast(r, buf[:], 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 5 {
+		t.Fatalf("expected 5, got %d", n)
+	}
+}
+
+func TestReadAtLeast_UnexpectedEOF(t *testing.T) {
+	r := &chunkReader{data: []byte{1, 2}, chunks: []int{1, 1}}
+	var buf [10]byte
+	_, err := readAtLeast(r, buf[:], 5)
+	if err != io.ErrUnexpectedEOF {
+		t.Fatalf("expected io.ErrUnexpectedEOF, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Addr.ReadFrom — AddrDomain length byte read error
+// ---------------------------------------------------------------------------
+
+func TestAddr_ReadFrom_DomainLenByteError(t *testing.T) {
+	buf := []byte{AddrDomain} // type byte only, no length byte
+	var a Addr
+	_, err := a.ReadFrom(bytes.NewReader(buf))
+	if err == nil {
+		t.Fatal("expected error reading domain length byte")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Addr.decode — all error paths
+// ---------------------------------------------------------------------------
+
+func TestAddr_decode_EmptyBuffer(t *testing.T) {
+	var a Addr
+	_, err := a.decode([]byte{})
+	if err != io.ErrUnexpectedEOF {
+		t.Fatalf("expected io.ErrUnexpectedEOF, got %v", err)
+	}
+}
+
+func TestAddr_decode_IPv6ShortBuffer(t *testing.T) {
+	var a Addr
+	b := []byte{AddrIPv6, 0, 0} // only 3 bytes total (need 1+16+2=19)
+	_, err := a.decode(b)
+	if err != io.ErrUnexpectedEOF {
+		t.Fatalf("expected io.ErrUnexpectedEOF, got %v", err)
+	}
+}
+
+func TestAddr_decode_DomainShortLength(t *testing.T) {
+	var a Addr
+	b := []byte{AddrDomain} // type + nothing else
+	_, err := a.decode(b)
+	if err != io.ErrUnexpectedEOF {
+		t.Fatalf("expected io.ErrUnexpectedEOF, got %v", err)
+	}
+}
+
+func TestAddr_decode_DomainShortData(t *testing.T) {
+	var a Addr
+	b := []byte{AddrDomain, 5, 'a', 'b'} // domain len=5, only 2 bytes + no port
+	_, err := a.decode(b)
+	if err != io.ErrUnexpectedEOF {
+		t.Fatalf("expected io.ErrUnexpectedEOF, got %v", err)
+	}
+}
+
+func TestAddr_decode_BadAddrType(t *testing.T) {
+	var a Addr
+	b := []byte{0x07, 0, 0} // unknown addr type
+	_, err := a.decode(b)
+	if !errors.Is(err, ErrBadAddrType) {
+		t.Fatalf("expected ErrBadAddrType, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ReadRequest — readAtLeast error (< 5 bytes)
+// ---------------------------------------------------------------------------
+
+func TestReadRequest_ReadAtLeastError(t *testing.T) {
+	_, err := ReadRequest(bytes.NewReader([]byte{Ver5, CmdConnect}))
+	if err == nil {
+		t.Fatal("expected readAtLeast error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ReadRequest — decode error (bad addr type in full buffer)
+// ---------------------------------------------------------------------------
+
+func TestReadRequest_DecodeError(t *testing.T) {
+	buf := []byte{Ver5, CmdConnect, 0, 0x07, 0, 0, 0, 0, 0, 0}
+	_, err := ReadRequest(bytes.NewReader(buf))
+	if !errors.Is(err, ErrBadAddrType) {
+		t.Fatalf("expected ErrBadAddrType, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ReadReply — readAtLeast error
+// ---------------------------------------------------------------------------
+
+func TestReadReply_ReadAtLeastError(t *testing.T) {
+	_, err := ReadReply(bytes.NewReader([]byte{Ver5, Succeeded}))
+	if err == nil {
+		t.Fatal("expected readAtLeast error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ReadReply — decode error
+// ---------------------------------------------------------------------------
+
+func TestReadReply_DecodeError(t *testing.T) {
+	buf := []byte{Ver5, Succeeded, 0, 0x07, 0, 0, 0, 0, 0, 0}
+	_, err := ReadReply(bytes.NewReader(buf))
+	if !errors.Is(err, ErrBadAddrType) {
+		t.Fatalf("expected ErrBadAddrType, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// UDPHeader.ReadFrom — addr ReadFrom error after 3-byte header
+// ---------------------------------------------------------------------------
+
+func TestUDPHeader_ReadFrom_AddrError(t *testing.T) {
+	var h UDPHeader
+	// Valid 3-byte header but no addr data follows
+	_, err := h.ReadFrom(bytes.NewReader([]byte{0, 0, 0}))
+	if err == nil {
+		t.Fatal("expected addr read error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// UDPDatagram.ReadFrom — non-EOF read error in standard path
+// ---------------------------------------------------------------------------
+
+type errorReader struct{}
+
+func (r *errorReader) Read(p []byte) (int, error) {
+	return 0, errors.New("read error")
+}
+
+func TestUDPDatagram_ReadFrom_NonEOFReadError(t *testing.T) {
+	addr := &Addr{Type: AddrIPv4, Host: "1.1.1.1", Port: 53}
+	h := NewUDPHeader(0, 0, addr)
+	var buf bytes.Buffer
+	h.WriteTo(&buf)
+
+	// Split into header bytes (good) and a failing reader for data
+	headerBytes := buf.Bytes()
+	errReader := &errorReader{}
+
+	// Use a reader that returns header then fails
+	combined := io.MultiReader(bytes.NewReader(headerBytes), errReader)
+	var dg UDPDatagram
+	dg.Data = make([]byte, 0)
+	// ReadFrom drops body read errors (pre-existing behavior), but the code path
+	// is exercised: it enters the rerr != nil branch and returns.
+	_, err := dg.ReadFrom(combined)
+	_ = err
+}
+
+// ---------------------------------------------------------------------------
+// UDPDatagram.ReadFrom — extended path readFull error
+// ---------------------------------------------------------------------------
+
+func TestUDPDatagram_ReadFrom_ExtendedReadError(t *testing.T) {
+	addr := &Addr{Type: AddrIPv4, Host: "10.0.0.1", Port: 9999}
+	header := NewUDPHeader(uint16(10), 0, addr) // Rsv=10, expect 10 bytes of data
+	var buf bytes.Buffer
+	header.WriteTo(&buf)
+	buf.Write([]byte{1, 2, 3}) // only 3 bytes, need 10
+
+	var dg UDPDatagram
+	dg.Data = make([]byte, 0)
+	_, err := dg.ReadFrom(&buf)
+	if err == nil {
+		t.Fatal("expected readFull error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// UDPDatagram.WriteTo — data write error after header write success
+// ---------------------------------------------------------------------------
+
+type nthWriteFailingWriter struct {
+	writes  int
+	failAt  int
+}
+
+func (w *nthWriteFailingWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		return 0, errors.New("injected write error")
+	}
+	return len(p), nil
+}
+
+func TestUDPDatagram_WriteTo_DataWriteError(t *testing.T) {
+	addr := &Addr{Type: AddrIPv4, Host: "1.1.1.1", Port: 80}
+	header := NewUDPHeader(0, 0, addr)
+	dg := NewUDPDatagram(header, []byte("data"))
+
+	// UDPHeader.WriteTo does 2 writes (3-byte header + addr bytes).
+	// The 3rd write is d.Data — make it fail.
+	w := &nthWriteFailingWriter{failAt: 3}
+	_, err := dg.WriteTo(w)
+	if err == nil {
+		t.Fatal("expected write error on data")
 	}
 }

@@ -2,6 +2,7 @@ package gosocks5_test
 
 import (
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
@@ -249,4 +250,63 @@ func TestConn_ReadWriteAfterHandshake(t *testing.T) {
 	if string(buf[:n]) != "hello" {
 		t.Fatalf("got %q", buf[:n])
 	}
+}
+
+// Test clientHandshake readFull error on method response (server sends < 2 bytes).
+func TestConn_ClientHandshake_ShortResponse(t *testing.T) {
+	cli, srv := net.Pipe()
+	defer cli.Close()
+
+	go func() {
+		var b [3]byte
+		io.ReadFull(srv, b[:])
+		srv.Write([]byte{gosocks5.Ver5})
+		srv.Close()
+	}()
+
+	cc := gosocks5.ClientConn(cli, client.DefaultSelector)
+	err := cc.Handleshake()
+	if err == nil {
+		t.Fatal("expected readFull error on short method response")
+	}
+	t.Logf("error: %v", err)
+}
+
+// Test clientHandshake bad version in server response.
+func TestConn_ClientHandshake_BadVersion(t *testing.T) {
+	cli, srv := net.Pipe()
+	defer cli.Close()
+
+	go func() {
+		var b [3]byte
+		io.ReadFull(srv, b[:])
+		srv.Write([]byte{0x00, gosocks5.MethodNoAuth})
+		srv.Close()
+	}()
+
+	cc := gosocks5.ClientConn(cli, client.DefaultSelector)
+	err := cc.Handleshake()
+	if err != gosocks5.ErrBadVersion {
+		t.Fatalf("expected ErrBadVersion, got %v", err)
+	}
+}
+
+// Test serverHandshake write error on method selection response.
+func TestConn_ServerHandshake_MethodWriteError(t *testing.T) {
+	cli, srv := net.Pipe()
+	defer cli.Close()
+
+	ec := &errorConn{Conn: srv, failWrite: true}
+	sc := gosocks5.ServerConn(ec, &noAuthSelector{})
+
+	go func() {
+		cc := gosocks5.ClientConn(cli, client.DefaultSelector)
+		cc.Handleshake()
+	}()
+
+	err := sc.Handleshake()
+	if err == nil {
+		t.Fatal("expected write error on method response")
+	}
+	t.Logf("error: %v", err)
 }

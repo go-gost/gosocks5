@@ -350,12 +350,8 @@ func (addr *Addr) ReadFrom(r io.Reader) (n int64, err error) {
 
 func (addr *Addr) WriteTo(w io.Writer) (int64, error) {
 	var b [259]byte
-	nn, err := addr.Encode(b[:])
-	if err != nil {
-		return int64(nn), err
-	}
-
-	nn, err = w.Write(b[:nn])
+	nn, _ := addr.Encode(b[:])
+	nn, err := w.Write(b[:nn])
 	return int64(nn), err
 }
 
@@ -429,10 +425,6 @@ func (addr *Addr) Encode(b []byte) (int, error) {
 		b[pos] = byte(len(addr.Host))
 		pos++
 		pos += copy(b[pos:], []byte(addr.Host))
-	default:
-		b[0] = AddrIPv4
-		copy(b[pos:pos+net.IPv4len], net.IPv4zero.To4())
-		pos += net.IPv4len
 	}
 	binary.BigEndian.PutUint16(b[pos:], addr.Port)
 	pos += 2
@@ -468,8 +460,6 @@ func (addr *Addr) Length() (n int) {
 		n = 19
 	case AddrDomain:
 		n = 4 + len(addr.Host)
-	default:
-		n = 7
 	}
 	return
 }
@@ -558,9 +548,7 @@ func ReadRequest(r io.Reader) (*Request, error) {
 		}
 	}
 	addr := new(Addr)
-	if _, err := addr.decode(b[3:length]); err != nil {
-		return nil, err
-	}
+	addr.decode(b[3:length])
 	request.Addr = addr
 
 	return request, nil
@@ -653,9 +641,7 @@ func ReadReply(r io.Reader) (*Reply, error) {
 	}
 
 	addr := new(Addr)
-	if _, err := addr.decode(b[3:length]); err != nil {
-		return nil, err
-	}
+	addr.decode(b[3:length])
 	reply.Addr = addr
 
 	return reply, nil

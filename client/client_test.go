@@ -180,6 +180,17 @@ func TestDialContext_HandshakeError(t *testing.T) {
 	}
 }
 
+func TestDial_DialTimeoutError(t *testing.T) {
+	// Use a non-routable IP with a very short timeout to force dial error
+	_, err := client.Dial("10.255.255.1:12345",
+		client.TimeoutDialOption(1*time.Nanosecond),
+	)
+	if err == nil {
+		t.Fatal("expected dial timeout error")
+	}
+	t.Logf("error: %v", err)
+}
+
 func TestDial_Auth(t *testing.T) {
 	// Start server with no-auth (uses DefaultHandler which calls DefaultSelector)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

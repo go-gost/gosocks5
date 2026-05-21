@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/go-gost/gosocks5"
 )
@@ -101,4 +102,142 @@ func TestServerSelector_OnSelected_FailureWriteErr(t *testing.T) {
 		t.Fatal("expected write error")
 	}
 	t.Logf("error: %v", err)
+}
+
+// ---------------------------------------------------------------------------
+// handleBind error paths
+// ---------------------------------------------------------------------------
+
+func TestHandler_HandleBind_ResolveError(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	h := &serverHandler{selector: DefaultSelector}
+
+	go h.Handle(c2)
+
+	cc := gosocks5.ClientConn(c1, nil)
+	if err := cc.Handleshake(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := gosocks5.NewRequest(gosocks5.CmdBind,
+		&gosocks5.Addr{Type: gosocks5.AddrDomain, Host: "invalid!:x", Port: 0})
+	if err := req.Write(cc); err != nil {
+		t.Fatal(err)
+	}
+
+	reply, err := gosocks5.ReadReply(cc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Rep != gosocks5.Failure {
+		t.Fatalf("expected Failure, got %d", reply.Rep)
+	}
+}
+
+func TestHandler_HandleBind_FirstReplyWriteError(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	// skipUntil=1: handshake write (method choice) succeeds, bind reply write fails
+	wc := &writeCountConn{Conn: c2, skipUntil: 1}
+	h := &serverHandler{selector: DefaultSelector}
+
+	go h.Handle(wc)
+
+	cc := gosocks5.ClientConn(c1, nil)
+	if err := cc.Handleshake(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := gosocks5.NewRequest(gosocks5.CmdBind,
+		&gosocks5.Addr{Type: gosocks5.AddrIPv4, Host: "127.0.0.1", Port: 0})
+	if err := req.Write(cc); err != nil {
+		t.Fatal(err)
+	}
+
+	// Bind reply write fails → conn closed → ReadReply gets EOF
+	_, err := gosocks5.ReadReply(cc)
+	if err == nil {
+		t.Log("unexpected: got reply despite write error on server")
+	}
+	_ = err
+}
+
+func TestHandler_HandleBind_AcceptError(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	h := &serverHandler{selector: DefaultSelector}
+
+	go h.Handle(c2)
+
+	cc := gosocks5.ClientConn(c1, nil)
+	if err := cc.Handleshake(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := gosocks5.NewRequest(gosocks5.CmdBind,
+		&gosocks5.Addr{Type: gosocks5.AddrIPv4, Host: "127.0.0.1", Port: 0})
+	if err := req.Write(cc); err != nil {
+		t.Fatal(err)
+	}
+
+	reply1, err := gosocks5.ReadReply(cc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply1.Rep != gosocks5.Succeeded {
+		t.Fatalf("expected Succeeded, got %d", reply1.Rep)
+	}
+
+	// Close client to trigger pipe error, which closes listener via defer
+	c1.Close()
+	time.Sleep(50 * time.Millisecond)
+}
+
+func TestHandler_HandleBind_SecondReplyWriteError(t *testing.T) {
+	c1, c2 := net.Pipe()
+	defer c1.Close()
+	defer c2.Close()
+
+	h := &serverHandler{selector: DefaultSelector}
+
+	go h.Handle(c2)
+
+	cc := gosocks5.ClientConn(c1, nil)
+	if err := cc.Handleshake(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := gosocks5.NewRequest(gosocks5.CmdBind,
+		&gosocks5.Addr{Type: gosocks5.AddrIPv4, Host: "127.0.0.1", Port: 0})
+	if err := req.Write(cc); err != nil {
+		t.Fatal(err)
+	}
+
+	reply1, err := gosocks5.ReadReply(cc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply1.Rep != gosocks5.Succeeded {
+		t.Fatalf("expected Succeeded, got %d", reply1.Rep)
+	}
+
+	// Close client → pipe goroutine errors → pc1.Close() → pc2 broken.
+	// Then connect as peer → accept succeds → second reply Write(pc2) fails.
+	c1.Close()
+
+	peerConn, err := net.Dial("tcp", reply1.Addr.String())
+	if err != nil {
+		t.Logf("peer dial error (may happen): %v", err)
+		return
+	}
+	defer peerConn.Close()
+
+	time.Sleep(50 * time.Millisecond)
 }

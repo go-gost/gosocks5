@@ -169,6 +169,23 @@ func TestClientSelector_UserPassNoUser(t *testing.T) {
 	}
 }
 
+func TestClientSelector_OnSelectedUserPass_ReadResponseError(t *testing.T) {
+	sel := NewClientSelector(nil, gosocks5.MethodUserPass)
+	c1, c2 := net.Pipe()
+	// Close server side after client sends request — ReadUserPassResponse will fail
+	go func() {
+		gosocks5.ReadUserPassRequest(c2)
+		c2.Close() // close before sending response
+	}()
+	defer c1.Close()
+
+	_, _, err := sel.OnSelected(gosocks5.MethodUserPass, c1)
+	if err == nil {
+		t.Fatal("expected ReadUserPassResponse error")
+	}
+	t.Logf("error: %v", err)
+}
+
 func TestClientSelector_OnSelectedUserPass_WriteError(t *testing.T) {
 	sel := NewClientSelector(nil, gosocks5.MethodUserPass)
 	c1, c2 := net.Pipe()

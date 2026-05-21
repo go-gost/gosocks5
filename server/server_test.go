@@ -550,3 +550,27 @@ func TestServer_Serve_TemporaryError(t *testing.T) {
 	srv.Close()
 	<-done
 }
+
+// Test Serve with many temporary accept errors (covers max backoff cap at 1s).
+func TestServer_Serve_TemporaryErrorMaxBackoff(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow temp error backoff test")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 12 temp errors → delay will exceed 1s cap (9th error hits cap)
+	mockLn := &mockListener{Listener: ln, tempErrCount: 12}
+	srv := &server.Server{Listener: mockLn}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- srv.Serve(server.DefaultHandler)
+	}()
+
+	// Wait for temp errors to trigger backoff cap (~1.3s to reach error #9)
+	time.Sleep(1500 * time.Millisecond)
+	srv.Close()
+	<-done
+}

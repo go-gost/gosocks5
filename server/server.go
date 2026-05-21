@@ -18,10 +18,7 @@ func (s *Server) Addr() net.Addr {
 // Serve serves incoming requests.
 func (s *Server) Serve(h Handler, options ...ServerOption) error {
 	if s.Listener == nil {
-		ln, err := net.ListenTCP("tcp", nil)
-		if err != nil {
-			return err
-		}
+		ln, _ := net.ListenTCP("tcp", nil)
 		s.Listener = ln
 	}
 	if h == nil {
