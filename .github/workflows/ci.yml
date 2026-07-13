@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Each module is a standalone, zero-dependency repo; build it in isolation
+    # regardless of any enclosing go.work.
+    env:
+      GOWORK: off
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      # Fuzz regression net: Go fuzzes exactly one target per `go test -fuzz`
+      # invocation, so enumerate the Fuzz* functions and run each for a short
+      # window. A crasher here is a panic/DoS regression and fails the job.
+      - name: Fuzz
+        run: |
+          for fn in $(grep -rhoE 'func (Fuzz[[:alnum:]_]+)' --include='*_test.go' . | sed 's/func //'); do
+            go test -fuzz="^${fn}$" -fuzztime=30s .
+          done
