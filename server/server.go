@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net"
 	"time"
 )
@@ -18,7 +19,9 @@ func (s *Server) Addr() net.Addr {
 // Serve serves incoming requests.
 func (s *Server) Serve(h Handler, options ...ServerOption) error {
 	if s.Listener == nil {
-		ln, _ := net.ListenTCP("tcp", nil)
+		lc := net.ListenConfig{}
+		lc.SetMultipathTCP(false)
+		ln, _ := lc.Listen(context.Background(), "tcp", "")
 		s.Listener = ln
 	}
 	if h == nil {
