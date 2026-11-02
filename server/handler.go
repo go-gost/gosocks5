@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net"
@@ -87,10 +86,7 @@ func (h *serverHandler) handleBind(conn net.Conn, req *gosocks5.Request) error {
 		gosocks5.NewReply(gosocks5.Failure, nil).Write(conn)
 		return err
 	}
-	lc := net.ListenConfig{}
-	lc.SetMultipathTCP(false)
-	ln0, err := lc.Listen(context.Background(), "tcp", bindAddr.String()) // strict mode: if the port already in use, it will return error
-	ln := ln0.(*net.TCPListener)
+	ln, err := net.ListenTCP("tcp", bindAddr) // strict mode: if the port already in use, it will return error
 	if err != nil {
 		gosocks5.NewReply(gosocks5.Failure, nil).Write(conn)
 		return err

@@ -1,8 +1,9 @@
 package server
 
 import (
-	"context"
 	"net"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -19,9 +20,7 @@ func (s *Server) Addr() net.Addr {
 // Serve serves incoming requests.
 func (s *Server) Serve(h Handler, options ...ServerOption) error {
 	if s.Listener == nil {
-		lc := net.ListenConfig{}
-		lc.SetMultipathTCP(false)
-		ln, _ := lc.Listen(context.Background(), "tcp", "")
+		ln, _ := net.ListenTCP("tcp", nil)
 		s.Listener = ln
 	}
 	if h == nil {
@@ -64,3 +63,16 @@ type ServerOptions struct {
 
 // ServerOption allows a common way to set server options.
 type ServerOption func(opts *ServerOptions)
+
+
+func init() {
+	// Disable Multipath TCP by default on Go versions that support it,
+	// to mitigate CVE-2026-98432.
+	if v := os.Getenv("GODEBUG"); !strings.Contains(v, "multipathtcp") {
+		if v == "" {
+			os.Setenv("GODEBUG", "multipathtcp=0")
+		} else {
+			os.Setenv("GODEBUG", v+",multipathtcp=0")
+		}
+	}
+}
